@@ -5,6 +5,7 @@ import sys.thread.Thread;
 import ws.impl.Types.BinaryType;
 import haxe.crypto.Base64;
 import haxe.io.Bytes;
+import sys.ssl.Socket as SecureSocket;
 
 @:noCompletion
 class WebSocket extends WebSocketBase {
@@ -57,13 +58,14 @@ class WebSocket extends WebSocketBase {
             #if (java || cs)
                 throw "Secure sockets not implemented";
             #else
+						*/
                 if (_port == 0) {
                     _port = 443;
                 }
                 return new SecureSocket();
-            #end
-            */
-            throw "todo wss";
+            
+            
+            // throw "todo wss";
         } else if (_protocol == "ws") {
             if (_port == 0) {
                 _port = 80;
@@ -144,7 +146,7 @@ class WebSocket extends WebSocketBase {
                 MainLoop.runInMainThread(ws.process);
             #end
             //ws.process();
-            Sys.sleep(0);
+            Sys.sleep(0.1);
         }
     }
 
