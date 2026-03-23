@@ -137,15 +137,8 @@ class WebSocket extends WebSocketBase {
     }
 
     private function processLoop(ws:WebSocket) {
-        while (ws.state != State.Closed) { // TODO: should think about mutex
-            #if jvm // no main event loop in jvm :(
-                ws.process();
-            #elseif haxe5
-                haxe.EventLoop.main.run(ws.process);
-            #else
-                MainLoop.runInMainThread(ws.process);
-            #end
-            //ws.process();
+        while (ws.state != State.Closed) {
+            ws.process();
             Sys.sleep(0.1);
         }
     }
