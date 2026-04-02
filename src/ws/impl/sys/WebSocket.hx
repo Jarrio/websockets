@@ -5,6 +5,7 @@ import sys.thread.Thread;
 import ws.impl.Types.BinaryType;
 import haxe.crypto.Base64;
 import haxe.io.Bytes;
+import haxe.io.Error;
 import sys.ssl.Socket as SecureSocket;
 
 @:noCompletion
@@ -18,8 +19,15 @@ class WebSocket extends WebSocketBase {
 	private var _encodedKey:String = "wskey";
 
 	public var binaryType:BinaryType;
+	public var manualProcess:Bool = false;
 
 	public var additionalHeaders(get, null):Map<String, String>;
+
+	public var rawSocket(get, never):Socket;
+
+	inline function get_rawSocket():Socket {
+		return _socket;
+	}
 
 	public function new(url:String, immediateOpen = true) {
 		parseUrl(url);
@@ -83,38 +91,106 @@ class WebSocket extends WebSocketBase {
 		_socket.connect(new sys.net.Host(_host), _port);
 		_socket.setBlocking(false);
 
-		#if !cs
-		#if websockets_threaded
-		_processThread = Thread.create(processThread);
-		_processThread.sendMessage(this);
-		#else
-		var event:haxe.MainLoop.MainEvent = null;
-		event = haxe.MainLoop.add(() -> {
-			if (this.state != State.Closed) { // TODO: should think about mutex
-				this.process();
-			} else {
-				event.stop();
-			}
-		});
-		#end
-		#else
-		#if websockets_threaded
-		haxe.MainLoop.addThread(function() {
-			processLoop(this);
-		});
-		#else
-		var event:haxe.MainLoop.MainEvent = null;
-		event = haxe.MainLoop.add(() -> {
-			if (this.state != State.Closed) { // TODO: should think about mutex
-				this.process();
-			} else {
-				event.stop();
-			}
-		});
-		#end
-		#end
+		if (!manualProcess) {
+			#if !cs
+			#if websockets_threaded
+			_processThread = Thread.create(processThread);
+			_processThread.sendMessage(this);
+			#else
+			var event:haxe.MainLoop.MainEvent = null;
+			event = haxe.MainLoop.add(() -> {
+				if (this.state != State.Closed) { // TODO: should think about mutex
+					this.process();
+				} else {
+					event.stop();
+				}
+			});
+			#end
+			#else
+			#if websockets_threaded
+			haxe.MainLoop.addThread(function() {
+				processLoop(this);
+			});
+			#else
+			var event:haxe.MainLoop.MainEvent = null;
+			event = haxe.MainLoop.add(() -> {
+				if (this.state != State.Closed) { // TODO: should think about mutex
+					this.process();
+				} else {
+					event.stop();
+				}
+			});
+			#end
+			#end
+		}
 
 		sendHandshake();
+	}
+
+	public function processReady() {
+		if (_onopenCalled == false) {
+			_onopenCalled = true;
+			if (onopen != null) {
+				onopen();
+			}
+		}
+
+		if (_lastError != null) {
+			var error = _lastError;
+			_lastError = null;
+			if (onerror != null) {
+				onerror(error);
+			}
+		}
+
+		var needClose = false;
+		var data = Bytes.alloc(ws.Defines.bufferSize());
+		try {
+			var read = _socket.input.readBytes(data, 0, data.length);
+			if (read > 0) {
+				_buffer.writeBytes(data.sub(0, read));
+			}
+		} catch (e:Dynamic) {
+			needClose = !isBlockedError(e);
+		}
+
+		if (!needClose) {
+			handleData();
+			// After handshake processing, _onopenCalled transitions from null to false.
+			// Fire onopen immediately so isConnected is set and heartbeats can start.
+			if (_onopenCalled == false) {
+				_onopenCalled = true;
+				if (onopen != null) {
+					onopen();
+				}
+			}
+		} else {
+			if (state != State.Closed) {
+				try {
+					state = State.Closed;
+					_socket.close();
+				} catch (e:Dynamic) {}
+				if (onclose != null) {
+					onclose();
+				}
+			}
+		}
+	}
+
+	private static function isBlockedError(e:Dynamic):Bool {
+		if (Std.isOfType(e, String)) {
+			var s:String = cast e;
+			var lower = s.toLowerCase();
+			return lower == 'blocked' || lower == 'blocking';
+		}
+		if (Std.isOfType(e, Error)) {
+			return (e : Error).match(Error.Blocked);
+		}
+		if (Std.isOfType(e, haxe.Exception)) {
+			var msg = (e : haxe.Exception).message.toLowerCase();
+			return msg == 'blocked' || msg == 'blocking';
+		}
+		return false;
 	}
 
 	private function processThread() {
